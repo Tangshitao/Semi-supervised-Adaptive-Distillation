@@ -1,0 +1,22 @@
+MODEL:
+  TYPE: cls
+  CONV_BODY: VGG16.add_VGG16_cls
+  NUM_CLASSES: 1000
+  #FASTER_RCNN: True
+NUM_GPUS: 4
+SOLVER:
+  WEIGHT_DECAY: 0.0001
+  LR_POLICY: steps_with_decay
+  BASE_LR: 0.04
+  GAMMA: 0.1
+  MAX_ITER: 45000
+  STEPS: [0, 30000, 40000]
+TRAIN:
+  DATASETS: ('Imagenet_train', )
+  ASPECT_GROUPING: False
+  IMS_PER_BATCH: 128
+TEST:
+  DATASETS: ('Imagenet_val',)
+CLS:
+  CLS_ON: True
+OUTPUT_DIR: .

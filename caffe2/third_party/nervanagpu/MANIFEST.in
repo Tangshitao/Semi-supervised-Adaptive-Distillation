@@ -1,0 +1,8 @@
+include README.md
+include setup.py
+include Makefile
+include LICENSE
+
+graft nervanagpu
+graft doc
+prune doc/build

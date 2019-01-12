@@ -1,0 +1,498 @@
+# Kernel: hsgemm_nn_32x128
+
+# Copyright 2014 Nervana Systems Inc. All rights reserved.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+# 
+#    http://www.apache.org/licenses/LICENSE-2.0
+# 
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+
+<CONSTANT_MAPPING>
+    addr_zero  : 4x<128*8*2 + 32*8*2 + 0>
+
+    gridDimA : c[0x0][0x14]
+    gridDimB : c[0x0][0x18]
+
+    param_Rand[0]   : c[0x0][0x140]
+    param_Rand[1]   : c[0x0][0x144]
+    param_A[0]      : c[0x0][0x148]
+    param_A[1]      : c[0x0][0x14c]
+    param_B[0]      : c[0x0][0x150]
+    param_B[1]      : c[0x0][0x154]
+    param_C[0]      : c[0x0][0x158]
+    param_C[1]      : c[0x0][0x15c]
+    param_lda       : c[0x0][0x160]
+    param_ldb       : c[0x0][0x164]
+    param_ldc       : c[0x0][0x168]
+    param_m         : c[0x0][0x16c]
+    param_n         : c[0x0][0x170]
+    param_k         : c[0x0][0x174]
+    param_alpha     : c[0x0][0x178]
+    param_beta      : c[0x0][0x17c]
+    param_flags     : c[0x0][0x180]
+</CONSTANT_MAPPING>
+
+<REGISTER_MAPPING>
+
+    32-79 ~ tidAX, tidBX, lda, ldb, ldb8, tid1, tid96_2, ta, tb, xmad_ta, xmad_tb, dimA, flag, tbid
+
+    32-79 ~ k1, k8, x<1-3>, x<65-67>
+
+    0-31 : czero<00-31>
+
+     3, 2,11,10 : cx<0-3>y0
+     7, 6,15,14 : cx<0-3>y1
+     1, 0, 9, 8 : cx<0-3>y2
+     5, 4,13,12 : cx<0-3>y3
+    19,18,27,26 : cx<0-3>y4
+    23,22,31,30 : cx<0-3>y5
+    17,16,25,24 : cx<0-3>y6
+    21,20,29,28 : cx<0-3>y7
+
+      32-43 : j0Ay<0-7>, j0Bx<0-3>
+      44-55 : j1Ay<0-7>, j1Bx<0-3>
+      56-67 : j2Ay<0-7>, j2Bx<0-3>
+      68-79 : j3Ay<0-7>, j3Bx<0-3>
+
+      80-83 : load0A<0-1>, load1A<0-1> 
+      84-99 : load0B<0-7>, load1B<0-7>
+  
+    100-103 : track0A<0-1>, track1A<0-1>
+    104-107 : track0B<0-1>, track1B<0-1>
+
+    108-117 ~ writeAs, writeBs, k, ldb16, tidAY, tidBY, txa, txb00, txb64
+    118-123 ~ readAs, readBs, tid, blkA, blkB, seed
+
+    124-125 : Rand<0-1>
+
+    32-39 : C00y<0-1>, C04y<0-1>, C08y<0-1>, C12y<0-1>
+    40-47 : c<0-3>, d3, d2, d1, d0
+    40-47 ~ ldc, cx, ci, xmad_c, clk_shf1, clk_shf2, tid31
+   48-111 ~ lfsr<0-2>, ldc1, ldc4, ldc12, writeCs, readCs, cy<00|04|08|12>, alpha, beta, exp<0-3>, rand<0-3>, lfsr<0-2>_1, lfsr<0-2>_2, flags
+
+</REGISTER_MAPPING>
+
+--:-:1:-:1      S2R tid,  SR_TID.X;
+--:-:2:-:1      S2R blkA, SR_CTAID.X;
+--:-:3:-:1      S2R blkB, SR_CTAID.Y;
+
+<SCHEDULE_BLOCK>
+--:-:-:-:1      MOV k,   param_k;
+--:-:-:-:1      MOV lda, param_lda;
+--:-:-:-:1      MOV ldb, param_ldb;
+--:-:-:-:1      SHL ldb8,  ldb, 5;
+--:-:-:-:1      SHL ldb16, ldb, 6;
+
+--:-:-:-:1      STS.128 [addr_zero], RZ;
+
+// tidBX = (tid & 15) << 2
+01:-:-:-:1      LOP.AND tidBX, tid,   15;
+--:-:-:-:1      SHL     tidBX, tidBX, 2;
+// tidBY = (tid >> 4)
+--:-:-:-:1      SHR.U32 tidBY, tid,   4;
+
+// tidAX = (tid & 7) | ((tid & 96) >> 2)
+--:-:-:-:1      LOP.AND tidAX,   tid,     7;
+01:-:-:-:1      LOP.AND tid96_2, tid,     96;
+--:-:-:-:1      SHR.U32 tid96_2, tid96_2, 2;
+--:-:-:-:1      LOP.OR  tidAX,   tidAX, tid96_2;
+// tidAY = (tid & 24) >> 2
+--:-:-:-:1      LOP.AND tidAY, tid,   24;
+--:-:-:-:1      SHR.U32 tidAY, tidAY, 2;
+
+// trackB += (blkB*128 + ldb*tidY + tidBX) * 4
+04:-:-:-:1      ISCADD   txb00, blkB, tidBX, 7;
+--:-:-:-:1      XMAD.LO2 tb,  ldb,  tidBY, txb00;
+--:-:-:-:1      LEA      track0B0.CC, tb, param_B[0],     2;
+--:-:-:-:1      LEA.HI.X track0B1,    tb, param_B[1], RZ, 2;
+--:-:-:-:1      IADD txb64, txb00, 64;
+
+// trackA += ((blkA*32 + tidAX) * lda + tidAY) * 2
+--:-:-:-:1      ISCADD  txa, blkA, tidAX, 5;
+--:-:-:-:1      XMAD.LO ta, lda, txa, tidAY, xmad_ta;
+--:-:-:-:1      LEA      track0A0.CC, ta, param_A[0],     1;
+--:-:-:-:1      LEA.HI.X track0A1,    ta, param_A[1], RZ, 1;
+
+// writeAs = (tidAY*32 + tidAX) * 4
+--:-:-:-:1      ISCADD writeAs, tidAY, tidAX, 5;
+--:-:-:-:1      SHL    writeAs, writeAs, 2;
+
+// writeBs = (tidBY*128 + tidBX + 32*8) * 4
+--:-:-:-:1      ISCADD writeBs, tidBY, tidBX, 7;
+--:-:-:-:1      ISCADD writeBs, writeBs, 4x<32*8>, 2;
+
+// readAs = (((tid & 16) >> 3) | (tid & 1)) << 4
+--:-:-:-:1      LOP.AND tid1,   tid,    1;
+--:-:-:-:1      LOP.AND readAs, tid,    16;
+--:-:-:-:1      SHR.U32 readAs, readAs, 3;
+--:-:-:-:1      LOP.OR  readAs, readAs, tid1;
+--:-:-:-:1      SHL     readAs, readAs, 4;
+
+// readBs = (((tid >> 1) & 7) | ((tid & 96) >> 2)) << 4
+--:-:-:-:1      BFE.U32 readBs, tid,    0x301; // 3 bits at position 1
+--:-:-:-:1      LOP.OR  readBs, readBs, tid96_2;
+--:-:-:-:1      SHL     readBs, readBs, 4;
+
+
+--:-:-:-:1      IADD   track1A0.CC, track0A0, 2x<8>;
+--:-:-:-:1      IADD.X track1A1,    track0A1, RZ;
+--:-:-:-:1      IADD   track1B0.CC, track0B0, ldb8;
+--:-:-:-:1      IADD.X track1B1,    track0B1, RZ;
+
+<CODE>
+    our $vec;
+    return $vec ? q{
+--:-:-:-:1      ISETP.LT.AND P5, PT, txb00, param_n, PT;
+--:-:-:-:1      ISETP.LT.AND P6, PT, txb64, param_n, PT;
+--:-:-:-:1      ISETP.LT.AND P4, PT, txa,   param_m, PT;
+
+<ORDERED>
+--:-:2:-:1  @P5 LDG.E.CI.128 load0B0, [track0B + 4x<00>];
+--:-:3:-:1  @P6 LDG.E.CI.128 load0B4, [track0B + 4x<64>];
+--:-:4:-:1  @P4 LDG.E.CI     load0A0, [track0A];
+
+--:-:5:-:1  @P4 LDG.E.CI     load1A0, [track1A];
+--:-:6:-:1  @P5 LDG.E.CI.128 load1B0, [track1B + 4x<00>];
+--:-:6:-:1  @P6 LDG.E.CI.128 load1B4, [track1B + 4x<64>];
+</ORDERED>
+
+--:-:-:-:1      ISETP.GE.AND P0, PT, k, 16, PT;
+--:-:-:-:1      ISETP.GT.AND P4, PT, k, 16, P4;
+--:-:-:-:1      ISETP.GT.AND P5, PT, k, 16, P5;
+--:-:-:-:1      ISETP.GT.AND P6, PT, k, 16, P6;
+--:-:-:-:1      IADD k, k, -16;
+    } : '';
+</CODE>
+
+// Grab a seed for this thread
+// (blkB*gridDimA*256 + blkA*256 + tid) & (1024*256 - 1)
+--:-:-:-:1      MOV flag, param_flags;
+--:-:-:-:1      LOP.AND.NZ P1, RZ, flag, 0x1;
+--:-:-:-:1      MOV dimA, gridDimA;
+02:-:-:-:1      ISCADD tbid, blkA, tid, 8;
+--:-:-:-:1      XMAD.U16.U16 dimA, blkB, dimA, RZ;
+--:-:-:-:1      ISCADD tbid, dimA, tbid, 8;
+--:-:-:-:1      LOP.AND seed, tbid, 1x<2048*32 - 1>;
+--:-:-:-:1      LEA      Rand0.CC, seed, param_Rand[0],     2;
+--:-:-:-:1      LEA.HI.X Rand1,    seed, param_Rand[1], RZ, 2;
+--:-:-:-:1  @P1 LDG.E.CS seed, [Rand];
+</SCHEDULE_BLOCK>
+
+<CODE>
+    return join '', map sprintf("--:-:-:-:1      LDS.U.128 czero%02d, [addr_zero];\n", $_ * 4), 0..7;
+</CODE>
+
+<CODE>
+    our $vec;
+    return $vec ? '' : q{
+REMAINDER:
+
+<SCHEDULE_BLOCK>
+--:-:-:-:1      IADD x1,  txb00,  1;
+--:-:-:-:1      IADD x2,  txb00,  2;
+--:-:-:-:1      IADD x3,  txb00,  3;
+--:-:-:-:1      ISETP.LT.AND P5, PT, txb00, param_n, PT;
+--:-:-:-:1      ISETP.LT.AND P0, PT, tidBY, k, P5;
+--:-:-:-:1      ISETP.LT.AND P1, PT, x1, param_n, P0;
+--:-:-:-:1      ISETP.LT.AND P2, PT, x2, param_n, P0;
+--:-:-:-:1      ISETP.LT.AND P3, PT, x3, param_n, P0;
+<ORDERED>
+--:-:2:-:1  @P0 LDG.E.CI load0B0, [track0B + 4x<0>];
+--:-:2:-:1  @P1 LDG.E.CI load0B1, [track0B + 4x<1>];
+--:-:2:-:1  @P2 LDG.E.CI load0B2, [track0B + 4x<2>];
+--:-:2:-:1  @P3 LDG.E.CI load0B3, [track0B + 4x<3>];
+</ORDERED>
+--:-:-:-:1 @!P0 MOV load0B0, RZ;
+--:-:-:-:1 @!P1 MOV load0B1, RZ;
+--:-:-:-:1 @!P2 MOV load0B2, RZ;
+--:-:-:-:1 @!P3 MOV load0B3, RZ;
+
+
+--:-:-:-:1      IADD x65, txb64, 1;
+--:-:-:-:1      IADD x66, txb64, 2;
+--:-:-:-:1      IADD x67, txb64, 3;
+--:-:-:-:1      ISETP.LT.AND P6, PT, txb64, param_n, PT;
+--:-:-:-:1      ISETP.LT.AND P0, PT, tidBY, k, P6;
+--:-:-:-:1      ISETP.LT.AND P1, PT, x65, param_n, P0;
+--:-:-:-:1      ISETP.LT.AND P2, PT, x66, param_n, P0;
+--:-:-:-:1      ISETP.LT.AND P3, PT, x67, param_n, P0;
+<ORDERED>
+--:-:3:-:1  @P0 LDG.E.CI load0B4, [track0B + 4x<64>];
+--:-:3:-:1  @P1 LDG.E.CI load0B5, [track0B + 4x<65>];
+--:-:3:-:1  @P2 LDG.E.CI load0B6, [track0B + 4x<66>];
+--:-:3:-:1  @P3 LDG.E.CI load0B7, [track0B + 4x<67>];
+</ORDERED>
+--:-:-:-:1 @!P0 MOV load0B4, RZ;
+--:-:-:-:1 @!P1 MOV load0B5, RZ;
+--:-:-:-:1 @!P2 MOV load0B6, RZ;
+--:-:-:-:1 @!P3 MOV load0B7, RZ;
+
+
+--:-:-:-:1      ISETP.LT.AND P4, PT, txa, param_m, PT;
+--:-:-:-:1      IADD k1, tidAY, 1;
+--:-:-:-:1      ISETP.LT.AND P0, PT, tidAY, k, P4;
+--:-:-:-:1      ISETP.LT.AND P1, PT, k1, k, P4;
+<ORDERED>
+--:-:4:-:1  @P0 LDG.E.CI.U16 load0A0, [track0A + 2x<0>];
+--:-:4:-:1  @P1 LDG.E.CI.U16 load0A1, [track0A + 2x<1>];
+</ORDERED>
+--:-:-:-:1 @!P0 MOV load0A0, RZ;
+--:-:-:-:1 @!P1 MOV load0A1, RZ;
+
+
+--:-:-:-:1      IADD k8, k, -8;
+--:-:-:-:1      ISETP.LT.AND P0, PT, tidAY, k8, P4;
+--:-:-:-:1      ISETP.LT.AND P1, PT, k1, k8, P4;
+<ORDERED>
+--:-:5:-:1  @P0 LDG.E.CI.U16 load1A0, [track1A + 2x<0>];
+--:-:5:-:1  @P1 LDG.E.CI.U16 load1A1, [track1A + 2x<1>];
+</ORDERED>
+--:-:-:-:1 @!P0 MOV load1A0, RZ;
+--:-:-:-:1 @!P1 MOV load1A1, RZ;
+
+
+--:-:-:-:1      ISETP.LT.AND P0, PT, tidBY, k8, P5;
+--:-:-:-:1      ISETP.LT.AND P1, PT, x1, param_n, P0;
+--:-:-:-:1      ISETP.LT.AND P2, PT, x2, param_n, P0;
+--:-:-:-:1      ISETP.LT.AND P3, PT, x3, param_n, P0;
+<ORDERED>
+--:-:6:-:1  @P0 LDG.E.CI load1B0, [track1B + 4x<0>];
+--:-:6:-:1  @P1 LDG.E.CI load1B1, [track1B + 4x<1>];
+--:-:6:-:1  @P2 LDG.E.CI load1B2, [track1B + 4x<2>];
+--:-:6:-:1  @P3 LDG.E.CI load1B3, [track1B + 4x<3>];
+</ORDERED>
+--:-:-:-:1 @!P0 MOV load1B0, RZ;
+--:-:-:-:1 @!P1 MOV load1B1, RZ;
+--:-:-:-:1 @!P2 MOV load1B2, RZ;
+--:-:-:-:1 @!P3 MOV load1B3, RZ;
+
+
+--:-:-:-:1      ISETP.LT.AND P0, PT, tidBY, k8, P6;
+--:-:-:-:1      ISETP.LT.AND P1, PT, x65, param_n, P0;
+--:-:-:-:1      ISETP.LT.AND P2, PT, x66, param_n, P0;
+--:-:-:-:1      ISETP.LT.AND P3, PT, x67, param_n, P0;
+<ORDERED>
+--:-:6:-:1  @P0 LDG.E.CI load1B4, [track1B + 4x<64>];
+--:-:6:-:1  @P1 LDG.E.CI load1B5, [track1B + 4x<65>];
+--:-:6:-:1  @P2 LDG.E.CI load1B6, [track1B + 4x<66>];
+--:-:6:-:1  @P3 LDG.E.CI load1B7, [track1B + 4x<67>];
+</ORDERED>
+--:-:-:-:1 @!P0 MOV load1B4, RZ;
+--:-:-:-:1 @!P1 MOV load1B5, RZ;
+--:-:-:-:1 @!P2 MOV load1B6, RZ;
+--:-:-:-:0 @!P3 MOV load1B7, RZ;
+
+--:-:-:-:1      ISETP.GT.AND P4, PT, k, 32, P4;
+--:-:-:-:1      ISETP.GT.AND P5, PT, k, 32, P5;
+--:-:-:-:1      ISETP.GT.AND P6, PT, k, 32, P6;
+</SCHEDULE_BLOCK>
+    };
+</CODE>
+
+
+02:-:-:-:1      STS.128 [writeBs + 4x<0*(128*8 + 32*8) + 00>], load0B0;
+04:-:-:-:1      STS.128 [writeBs + 4x<0*(128*8 + 32*8) + 64>], load0B4;
+
+--:-:-:-:0      IADD   track0B0.CC, track0B0, ldb16;
+
+<CODE>
+    our $vec;
+    return $vec ? q{
+08:-:3:-:4      F2F.F32.F16 load0A1, load0A0.H1;
+--:-:4:-:1      F2F.F32.F16 load0A0, load0A0.H0;
+    } : q{
+08:-:3:-:4      F2F.F32.F16 load0A1, load0A1;
+--:-:4:-:1      F2F.F32.F16 load0A0, load0A0;
+    };
+</CODE>
+
+04:-:-:-:1      STS     [writeAs + 4x<0*(128*8 + 32*8) +32>], load0A1;
+--:-:-:-:0      IADD.X track0B1, track0B1, RZ;
+08:-:-:-:1      STS     [writeAs + 4x<0*(128*8 + 32*8) + 0>], load0A0;
+
+--:-:-:-:0      IADD   track0A0.CC, track0A0, 2x<16>;
+
+--:-:-:-:6      BAR.SYNC 0;
+
+--:-:-:-:0      IADD.X track0A1, track0A1, RZ;
+
+--:-:1:-:1      LDS.U.128 j0Ay0, [readAs + 4x<0*32  + 0*(128*8 + 32*8) + 00>];
+--:-:1:-:1      LDS.U.128 j0Bx0, [readBs + 4x<0*128 + 0*(128*8 + 32*8) + 32*8>];
+--:-:1:-:1      LDS.U.128 j0Ay4, [readAs + 4x<0*32  + 0*(128*8 + 32*8) + 16>];
+--:-:2:-:1      LDS.U.128 j1Ay0, [readAs + 4x<1*32  + 0*(128*8 + 32*8) + 00>];
+--:-:2:-:1      LDS.U.128 j1Bx0, [readBs + 4x<1*128 + 0*(128*8 + 32*8) + 32*8>];
+--:-:2:-:1      LDS.U.128 j1Ay4, [readAs + 4x<1*32  + 0*(128*8 + 32*8) + 16>];
+<CODE>
+    our $vec;
+    return $vec ? q{
+--:-:3:-:1  @P5 LDG.E.CI.128 load0B0, [track0B + 4x<00>];
+--:-:3:-:1  @P6 LDG.E.CI.128 load0B4, [track0B + 4x<64>];
+--:-:4:-:1  @P4 LDG.E.CI     load0A0, [track0A];
+    } : q{
+--:-:3:-:1  @P5 LDG.E.CI load0B0, [track0B + 4x<0>];
+--:-:3:-:1  @P5 LDG.E.CI load0B1, [track0B + 4x<1>];
+--:-:3:-:1  @P5 LDG.E.CI load0B2, [track0B + 4x<2>];
+--:-:3:-:1  @P5 LDG.E.CI load0B3, [track0B + 4x<3>];
+--:-:3:-:1  @P6 LDG.E.CI load0B4, [track0B + 4x<64>];
+--:-:3:-:1  @P6 LDG.E.CI load0B5, [track0B + 4x<65>];
+--:-:3:-:1  @P6 LDG.E.CI load0B6, [track0B + 4x<66>];
+--:-:3:-:1  @P6 LDG.E.CI load0B7, [track0B + 4x<67>];
+--:-:4:-:1  @P4 LDG.E.CI.U16 load0A0, [track0A + 2x<0>];
+--:-:4:-:1  @P4 LDG.E.CI.U16 load0A1, [track0A + 2x<1>];
+    };
+</CODE>
+
+<CODE>
+    our $vec;
+    our @insert =
+    (
+        {
+            ($vec ? 
+                (
+                    j1c15 => "10:-:-:-:1      F2F.F32.F16 load1A1, load1A0.H1;\n",
+                    j1c19 => "--:-:5:-:1      F2F.F32.F16 load1A0, load1A0.H0;\n",
+
+                    j2c6  => "10:-:-:-:1      STS     [writeAs + 4x<1*(128*8 + 32*8) + 32>], load1A1;\n",
+                    j2c8  => "--:-:-:-:1      STS     [writeAs + 4x<1*(128*8 + 32*8) + 00>], load1A0;\n",
+
+                    j3c6  => "20:-:-:-:1      STS.128 [writeBs + 4x<1*(128*8 + 32*8) + 00>], load1B0;\n",
+
+                    j3c25 => "--:-:-:-:1      IADD   track1A0.CC, track1A0, 2x<16>;\n",
+                    j3c30 => "--:-:-:-:1      IADD.X track1A1,    track1A1, RZ;\n",
+
+                    j4c6  => "--:-:-:-:1      STS.128 [writeBs + 4x<1*(128*8 + 32*8) + 64>], load1B4;\n",
+
+                    j4c25 => "--:-:-:-:1      IADD   track1B0.CC, track1B0, ldb16;\n",
+                    j4c30 => "--:-:-:-:1      IADD.X track1B1,    track1B1, RZ;\n",
+
+                    j5c31 => "--:-:-:-:5      BAR.SYNC 0;\n",
+
+                    j6c1  => "--:-:5:-:1  \@P4 LDG.E.CI     load1A0, [track1A];\n",
+                    j6c3  => "--:-:6:-:1  \@P5 LDG.E.CI.128 load1B0, [track1B + 4x<00>];\n",
+                    j6c5  => "--:-:6:-:1  \@P6 LDG.E.CI.128 load1B4, [track1B + 4x<64>];\n",
+                ) :
+                (
+                    j1c15 => "10:-:-:-:1      F2F.F32.F16 load1A1, load1A1;\n",
+                    j1c19 => "--:-:5:-:1      F2F.F32.F16 load1A0, load1A0;\n",
+
+                    j2c6  => "10:-:-:-:1      STS     [writeAs + 4x<1*(128*8 + 32*8) + 32>], load1A1;\n",
+                    j2c8  => "--:-:-:-:1      STS     [writeAs + 4x<1*(128*8 + 32*8) + 00>], load1A0;\n",
+
+                    j3c6  => "20:-:-:-:1      STS.128 [writeBs + 4x<1*(128*8 + 32*8) + 00>], load1B0;\n",
+
+                    j3c25 => "--:-:-:-:1      IADD   track1A0.CC, track1A0, 2x<16>;\n",
+                    j3c30 => "--:-:-:-:1      IADD.X track1A1,    track1A1, RZ;\n",
+
+                    j4c6  => "--:-:-:-:1      STS.128 [writeBs + 4x<1*(128*8 + 32*8) + 64>], load1B4;\n",
+
+                    j4c25 => "--:-:-:-:1      IADD   track1B0.CC, track1B0, ldb16;\n",
+                    j4c30 => "--:-:-:-:1      IADD.X track1B1,    track1B1, RZ;\n",
+
+                    j5c31 => "--:-:-:-:5      BAR.SYNC 0;\n",
+
+                    j6c1  => "--:-:5:-:1  \@P4 LDG.E.CI.U16     load1A0, [track1A + 2x<0>];\n",
+                    j6c3  => "--:-:5:-:1  \@P4 LDG.E.CI.U16     load1A1, [track1A + 2x<1>];\n",
+
+                    j6c5  => "--:-:6:-:1  \@P5 LDG.E.CI load1B0, [track1B + 4x<0>];\n",
+                    j6c7  => "--:-:6:-:1  \@P5 LDG.E.CI load1B1, [track1B + 4x<1>];\n",
+                    j6c9  => "--:-:6:-:1  \@P5 LDG.E.CI load1B2, [track1B + 4x<2>];\n",
+                    j6c11 => "--:-:6:-:1  \@P5 LDG.E.CI load1B3, [track1B + 4x<3>];\n",
+
+                    j6c13 => "--:-:6:-:1  \@P6 LDG.E.CI load1B4, [track1B + 4x<64>];\n",
+                    j6c15 => "--:-:6:-:1  \@P6 LDG.E.CI load1B5, [track1B + 4x<65>];\n",
+                    j6c17 => "--:-:6:-:1  \@P6 LDG.E.CI load1B6, [track1B + 4x<66>];\n",
+                    j6c19 => "--:-:6:-:1  \@P6 LDG.E.CI load1B7, [track1B + 4x<67>];\n",
+                )
+            ),
+        },
+        {
+            ($vec ? 
+                (
+                    j0c6  => "--:-:-:-:1      ISETP.GE.AND P0, PT, k, 16, PT;\n",
+
+                    j2c6  => "04:-:-:-:1  \@P0 STS.128 [writeBs + 4x<0*(128*8 + 32*8) + 00>], load0B0;\n",
+
+                    j2c8  => "--:-:-:-:1      ISETP.GT.AND P4, PT, k, 16, P4;\n",
+                    j2c10 => "--:-:-:-:1      ISETP.GT.AND P5, PT, k, 16, P5;\n",
+                    j2c12 => "--:-:-:-:1      ISETP.GT.AND P6, PT, k, 16, P6;\n",
+                    j2c14 => "--:-:-:-:1      IADD k, k, -16;\n",
+
+                    j3c6  => "--:-:-:-:1  \@P0 STS.128 [writeBs + 4x<0*(128*8 + 32*8) + 64>], load0B4;\n",
+
+                    j3c8  => "08:-:3:-:1  \@P0 F2F.F32.F16 load0A1, load0A0.H1;\n",
+                    j3c12 => "--:-:4:-:1  \@P0 F2F.F32.F16 load0A0, load0A0.H0;\n",
+
+                    j3c25 => "--:-:-:-:1  \@P0 IADD   track0B0.CC, track0B0, ldb16;\n",
+                    j3c30 => "--:-:-:-:1  \@P0 IADD.X track0B1,    track0B1, RZ;\n",
+
+                    j4c6  => "04:-:-:-:1  \@P0 STS     [writeAs + 4x<0*(128*8 + 32*8) + 32>], load0A1;\n",
+                    j4c8  => "08:-:-:-:1  \@P0 STS     [writeAs + 4x<0*(128*8 + 32*8) + 00>], load0A0;\n",
+
+                    j4c25 => "--:-:-:-:1  \@P0 IADD   track0A0.CC, track0A0, 2x<16>;\n",
+                    j4c30 => "--:-:-:-:1  \@P0 IADD.X track0A1,    track0A1, RZ;\n",
+
+                    j5c31 => "--:-:-:-:5  \@P0 BAR.SYNC 0;\n",
+
+                    j6c1  => "--:-:3:-:1  \@P5 LDG.E.CI.128 load0B0, [track0B + 4x<00>];\n",
+                    j6c3  => "--:-:3:-:1  \@P6 LDG.E.CI.128 load0B4, [track0B + 4x<64>];\n",
+                    j6c5  => "--:-:4:-:1  \@P4 LDG.E.CI     load0A0, [track0A];\n",
+
+                    j7c31 => "--:-:-:Y:5  \@P0 BRA.U LOOP;\n"
+                ) :
+                (
+                    j2c6  => "04:-:-:-:1      STS.128 [writeBs + 4x<0*(128*8 + 32*8) + 00>], load0B0;\n",
+
+                    j3c6  => "--:-:-:-:1      STS.128 [writeBs + 4x<0*(128*8 + 32*8) + 64>], load0B4;\n",
+
+                    j3c8  => "08:-:3:-:1      F2F.F32.F16 load0A1, load0A1;\n",
+                    j3c12 => "--:-:4:-:1      F2F.F32.F16 load0A0, load0A0;\n",
+
+                    j3c25 => "--:-:-:-:1  \@P5 IADD   track0B0.CC, track0B0, ldb16;\n",
+                    j3c30 => "--:-:-:-:1  \@P5 IADD.X track0B1,    track0B1, RZ;\n",
+
+                    j4c6  => "04:-:-:-:1      STS     [writeAs + 4x<0*(128*8 + 32*8) + 32>], load0A1;\n",
+                    j4c8  => "08:-:-:-:1      STS     [writeAs + 4x<0*(128*8 + 32*8) + 00>], load0A0;\n",
+
+                    j4c9  => "--:-:-:-:1  \@P4 IADD   track0A0.CC, track0A0, 2x<16>;\n",
+                    j4c14 => "--:-:-:-:1  \@P4 IADD.X track0A1,    track0A1, RZ;\n",                
+
+                    j4c12 => "--:-:-:-:1      IADD k, k, -16;\n",
+                    j4c17 => "--:-:-:-:1      ISETP.GT.AND P0, PT, k, 16, PT;\n",
+                    j4c19 => "--:-:-:-:1      ISETP.GT.AND P5, PT, k, 32, P5;\n",
+                    j4c21 => "--:-:-:-:1      ISETP.GT.AND P6, PT, k, 32, P6;\n",
+                    j4c23 => "--:-:-:-:1      ISETP.GT.AND P4, PT, k, 32, P4;\n",
+                    j4c25 => "--:-:-:-:1      ISETP.GT.AND P1, PT, k, RZ, PT;\n",
+ 
+                    j5c31 => "--:-:-:-:5      BAR.SYNC 0;\n",
+
+                    j6c1  => "--:-:3:-:1  \@P5 LDG.E.CI load0B0, [track0B + 4x<0>];\n",
+                    j6c3  => "--:-:3:-:1  \@P5 LDG.E.CI load0B1, [track0B + 4x<1>];\n",
+                    j6c5  => "--:-:3:-:1  \@P5 LDG.E.CI load0B2, [track0B + 4x<2>];\n",
+                    j6c7  => "--:-:3:-:1  \@P5 LDG.E.CI load0B3, [track0B + 4x<3>];\n",
+
+                    j6c9  => "--:-:3:-:1  \@P6 LDG.E.CI load0B4, [track0B + 4x<64>];\n",
+                    j6c11 => "--:-:3:-:1  \@P6 LDG.E.CI load0B5, [track0B + 4x<65>];\n",
+                    j6c13 => "--:-:3:-:1  \@P6 LDG.E.CI load0B6, [track0B + 4x<66>];\n",
+                    j6c15 => "--:-:3:-:1  \@P6 LDG.E.CI load0B7, [track0B + 4x<67>];\n",
+
+                    j6c17 => "--:-:4:-:1  \@P4 LDG.E.CI.U16     load0A0, [track0A + 2x<0>];\n",
+                    j6c19 => "--:-:4:-:1  \@P4 LDG.E.CI.U16     load0A1, [track0A + 2x<1>];\n",
+
+                    j7c31 => "--:-:-:Y:5  \@P0 BRA.U LOOP;\n" . 
+                             "--:-:-:Y:5  \@P1 BRA.U REMAINDER;\n" 
+                )
+            ),
+        },
+    );
+    return '';
+</CODE>
+
+<INCLUDE file="nervanagpu/kernels/sass/hgemm_common_32x128.sass"/>
