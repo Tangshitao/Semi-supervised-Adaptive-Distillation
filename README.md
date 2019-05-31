@@ -18,12 +18,13 @@ We include the custom caffe2 in our code. The requirements is the same as the of
 Please follow the official installation step of [detectron](https://github.com/facebookresearch/Detectron/blob/master/INSTALL.md).
 
 ## Resources
-1. Teacher model: ResNet-101. [BaiduYun](), [Google Drive]()
-2. Teacher model: ResNext-101. [BaiduYun](), [Google Drive]()
-3. The annotation file for COCO 2017 unlabel data produced by the ResNet-101 teacher model above. [BaiduYun](), [Google Drive]()
-4. The annotation file for COCO 2017 unlabel data produced by the ResNext-101 teacher model above. [BaiduYun](), [Google Drive]()
-5. Student model after distillation: ResNet-50. [BaiduYun](). [Google Drive]()
-5. Student model after distillation: ResNet-101. [BaiduYun](). [Google Drive]()
+1. Teacher model: ResNet-101. [BaiduYun](https://pan.baidu.com/s/1TM4I_Oh8PopWmiPfiNCAgw), [Google Drive](https://drive.google.com/file/d/1U0ztguUHH2aSgoa9wlwaQbvykbZmtOMx/view?usp=sharing)
+2. Teacher model: ResNext-101. [BaiduYun](https://pan.baidu.com/s/179YtcwfNiUMUwfQHZrQJOQ), [Google Drive](https://drive.google.com/open?id=1aGy2XhGsZUgyOeYz7d634_kpsKl03IJp)
+3. The annotation file for COCO 2017 unlabel data produced by the ResNet-101 teacher model above. [BaiduYun](https://pan.baidu.com/s/1oQRpiEGKj7ouUfkqHuuBcw), [Google Drive](https://drive.google.com/open?id=1OwOIgrKgnLrkVvWXT8Dm_1fDlk82mans)
+4. The annotation file for COCO 2017 unlabel data produced by the ResNext-101 teacher model above. [BaiduYun](https://pan.baidu.com/s/1HVtsagarfVi9JbFPO7WiRg), [Google Drive](https://drive.google.com/open?id=1bYbXzVk6AgVO3nsZT1FZZ9nXeamzWF7w)
+5. Student model after distillation: ResNet-50. [BaiduYun](https://pan.baidu.com/s/1ENCADkbnUlo9Dls1fS4I9w). [Google Drive](https://drive.google.com/open?id=10ZGYRKXuhDkoibXb9CuO5-YRNC2t3cYN)
+5. Student model after distillation: ResNet-101. [BaiduYun](https://pan.baidu.com/s/1epMPEWPUw9ULn6KVjn6iDw). [Google Drive](https://drive.google.com/open?id=1AsezxkROn9jcLikjiLbZFeh-3wGNJUpX)
+
 
 ## Training
 ```
