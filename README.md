@@ -1,6 +1,6 @@
 # Semi-supervised Adaptive Distillation
 
-Semi-supervised Adaptive Distillation is a model compression method for object detection. Please refer to our [paper]() for more details. The code is implemented with official [detectron](https://github.com/facebookresearch/Detectron) and [Caffe2](https://github.com/caffe2/caffe2).
+Semi-supervised Adaptive Distillation is a model compression method for object detection. Please refer to our [paper](https://arxiv.org/pdf/1901.00366.pdf) for more details. The code is implemented with official [detectron](https://github.com/facebookresearch/Detectron) and [Caffe2](https://github.com/caffe2/caffe2).
 
 
 ## Main results
